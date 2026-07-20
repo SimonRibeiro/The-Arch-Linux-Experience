@@ -1,5 +1,6 @@
-# The-Arch-Linux-Experience
-My Journey Through BTW
+# The Arch Linux Experience
+
+Insert meme
 
 ## Installation
 
@@ -39,7 +40,7 @@ If font is to small use:
 >
 >> suggested large font for HiDPI screens by the [arch wiki]( https://wiki.archlinux.org/title/Installation_guide#Set_the_console_keyboard_layout_and_font)
 >
->> alternatively, `setfont -d` to double current font size
+>> alternatively, `setfont -d` or `setfont --double` to double current font size
 
 #### Setting up the internet connection
 
@@ -87,16 +88,182 @@ Making sure the connection was successful (no `Poeration failed` message):
 
 > `[iwd]#` station `name` show
 
-##### On personal laptop (Broadcom wireless controller BCM4311)
-Unsupported device for linux, including by the mainline driver and the modern reversed engineered driver: must use the b43-firmware-classicAUR package.
-
-> Installation must be done via Ethernet or wi-fi usb dongle. See [Download desired packages]( #### Download-desired-packages)
-
 #### Update system clock:
 
 > timedatectl
 
-#### Partitioning discs
+### Install preparation
+
+#### On work laptop - ASUS ExpertBook P3 PM3406CKA
+14″ 1920x1200@60 TN
+1TiB WD M2 PCIe4
+32GB (Max 64)
+AMD Ryzen AI 7 350 (4+4/8+8@2-5GHz+2-3,5GHz; 16Mo cache ; Max DDR5@256GB bi-channel)
+AMD Radeon™ 860M (3000MHz FreeSync; Max 4 displays)
+
+Only one drive: NVMe. Requiered to by encrypted.
+
+1.	Sanitizing the NVMe to ensure proper removal of factory OS (https://wiki.archlinux.org/title/Solid_state_drive/Memory_cell_clearing#NVMe_drive)
+2.	Changing the NVMe sector size to 4096 (if relevant) as recommended for dm-crypt by [arch wiki]( https://wiki.archlinux.org/title/Advanced_Format#dm-crypt)
+
+> will wipe the disk (full of zeros) but for stronger encryption (https://wiki.archlinux.org/title/Solid_state_drive#dm-crypt) (https://wiki.archlinux.org/title/Securely_wipe_disk#Preparations_for_block_device_encryption) and [plausible deniability](https://wiki.archlinux.org/title/Dm-crypt/Specialties#Discard/TRIM_support_for_solid_state_drives_(SSD)) the disk must then be filled with RNG
+
+3.	No TRIM, Additional Drive preparation with RNG wipe (will forbid the use of ssd TRIM which may or may not impact performances and is thus disabled by default): 
+https://wiki.archlinux.org/title/Dm-crypt/Drive_preparation 
+
+> Hynix PC601, Lenovo and Dell laptops, Samsung and WD SN750 drive may not `nvme format` command and require a 
+
+4.	plain dm-crypt on LVM: https://wiki.archlinux.org/title/Dm-crypt/Encrypting_an_entire_system#Plain_dm-crypt 
+OR: LUKS on LVM https://wiki.archlinux.org/title/Dm-crypt/Encrypting_an_entire_system#LUKS_on_LVM 
+
+Given the threat model the company faces, the “weaker” encryption / “better” performances model of LUKS on LVM and enabled TRIM is adopted.
+
+Swap is encrypted at each reboot but /boot remains unencrypted.
+Add UEFI secure boot ?
+
+**NVMe sanitization**
+
+`fdisk -l` to verify devices, sector size, partitions
+
+`nvme sanitize /dev/nvme0 -a start-block-erase` to start wipe
+
+`nvme sanitize-log /dev/nvme0` to follow progress
+
+> `Sanitize Status : 0x101` is successful complete
+>
+> `(No time period reported)` is several hours…
+
+**NVMe sector size optimization**
+
+`nvme id-ns -H /dev/nvme0n1 | grep "Relative Performance"` to check 4KiB sector size compatibility
+
+`nvme format --lbaf=1 /dev/nvme0n1` to make the change
+
+> `lbaf` value is given in the previous command’s output
+
+##### LUKS on LVM
+
+**Partitioning**
+
+`cfdisk /dev/nvme0n1`, to create partitions with automatic partition alignment in a TUI
+
+>Select `gpt`
+>
+> Select `[ New ]` on `Free space` and set `Partition size` to `1G`
+>
+> Select `[Type]` and then `EFI System`
+>
+> Again on `Free space`, select `[ New ]` and leave partition size as is
+>
+> Then select `[ Write ]` and enter `yes`
+>
+> Finally select `[ Quit ]`
+
+**Preparing the logical volumes**
+
+`pvcreate /dev/nvme0n1p2`
+
+`vgcreate MyVolGroup /dev/nvme0n1p2`
+
+`lvcreate -L 32G -n cryptswap MyVolGroup`
+
+`lvcreate -L 32G -n cryptroot MyVolGroup`
+
+`lvcreate -l 100%FREE -n crypthome MyVolGroup`
+
+`cryptsetup luksFormat /dev/MyVolGroup/cryptroot`
+
+> type `YES`
+>
+> enter passphrase and verify
+
+`cryptsetup --allow-discards --persistent open /dev/MyVolGroup/cryptroot root`
+
+> enter passphrase
+
+See https://wiki.archlinux.org/title/Dm-crypt/Specialties#LUKS2 
+
+**Formatting**
+
+`mkfs.ext4 /dev/mapper/root`
+
+`mkfs.fat -F32 /dev/nvme0n1p1`
+
+**Mounting**
+
+`mount /dev/mapper/root /mnt`
+
+`mkdir /mnt/boot`
+
+`mount /dev/nvem0n1p1 /mnt/boot`
+
+**Configuring mkinitcpio**
+
+`pacman -S lvm2` to make sure it’s installed
+
+For system-based initramfs edit `/etc/mkinitcpio.conf`
+
+> Add `sd-encrypt` and `lvm2` to the already uncommented line in the following order:
+>
+> `HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)`
+>
+>> `keyboard` and `sd-console` might also need to be added
+
+`mkinitcpio -P` to regenerate the initramfs image
+
+> The `systemd` hook already provides a resume mechanism https://wiki.archlinux.org/title/Power_management/Suspend_and_hibernate#Configure_the_initramfs 
+
+**Configurating the boot loader**
+`lsblk -f` to check the UUID of the LUKS superblock: `/dev/MyVolGroup/cryptroot`
+
+> 472cb548-801b-408d-8845-ce93b0b7e649
+
+Edit `/etc/default/grub` by adding the following to the `GRUB_CMDLINE_LINUX_DEFAULT=`:
+
+`rd.luks.name=<cryptroot_UUID>=root root=/dev/mapper/root resume=/dev/mapper/swap`
+
+**Configuring fstab and crypttab to re-encrypt /swap on each reboot**
+
+> plain dm-crypt, see: https://wiki.archlinux.org/title/Dm-crypt/Encrypting_an_entire_system#Preparing_the_disk_4 
+
+Uncomment and edit the `etc/crypttab` line starting with `swap` to unlock it (add option `discard` as fourth field):
+
+> `swap	/dev/MyVolGroup/cryptswap	/dev/urandom	swap,cipher=aes-xts-plain64,size=256,sector-size=4096	discard`
+
+`lsblk -f` to check the UUID of `nvme0n1p1`
+
+> 45BB-673F
+
+Edit `etc/fstab` and add the following lines to mount it:
+
+> /dev/mapper/root	/	ext4	defaults	0	1
+>
+> UUID=<nvme0p1n1_UUID>	/boot	vfat	defaults	0	2
+>
+> /dev/mapper/swap	none	swap	discard	0	0
+
+See https://wiki.archlinux.org/title/Dm-crypt/Swap_encryption#systemd-based_initramfs and https://wiki.archlinux.org/title/Dm-crypt/Specialties#LUKS1_and_plain_dm-crypt 
+
+
+**Encrypting /home**
+
+To be done after rebooting the installed OS https://wiki.archlinux.org/title/Dm-crypt/Encrypting_an_entire_system#Encrypting_logical_volume_/home 
+
+#### On personal laptop (Broadcom wireless controller BCM4311)
+
+SSD + HDD
+
+Swap with hibernate and no encryption; enabled TRIM
+
+> See https://wiki.archlinux.org/title/Power_management/Suspend_and_hibernate#Hibernation
+
+
+Unsupported device for linux, including by the mainline driver and the modern reversed engineered driver: must use the b43-firmware-classicAUR package.
+
+> Installation must be done via Ethernet or wi-fi usb dongle. See [Download desired packages]( #### Download-desired-packages)
+
+Needs revisioning:
+**Partitioning discs**
 
 `lsblk` to list all block devices and confirm discs names
 
@@ -111,29 +278,12 @@ Unsupported device for linux, including by the mainline driver and the modern re
 > For multi-OS boot resize largest
 
 -	If booting in UEFI and EFI system partition not already existing (in case of multi-boot)
-`/boot`: at least 4GB
+`/boot`: 1GB
 -	If desired
-`[swap]`: 1GB
+`[swap]`: at least 4GB
 -	`/`: remainder of the device
 
-##### On work laptop
-
-Only one drive: NVMe. Requiered to by encrypted.
-
-1.	Sanitizing the NVMe to ensure proper removal of factory OS (https://wiki.archlinux.org/title/Solid_state_drive/Memory_cell_clearing#NVMe_drive)
-2.	Changing the NVMe sector size to 4096 (if relevant) as recommended for dm-crypt by [arch wiki]( https://wiki.archlinux.org/title/Advanced_Format#dm-crypt)
-
-> will wipe the disk (full of zeros) but for stronger encryption (https://wiki.archlinux.org/title/Solid_state_drive#dm-crypt) (https://wiki.archlinux.org/title/Securely_wipe_disk#Preparations_for_block_device_encryption) and [plausible deniability](https://wiki.archlinux.org/title/Dm-crypt/Specialties#Discard/TRIM_support_for_solid_state_drives_(SSD)) the disk must then be filled with RNG
-
-3.	Drive preparation with RNG wipe (will forbid the use of ssd TRIM which may or may not impact performances and is thus disabled by default): 
-https://wiki.archlinux.org/title/Dm-crypt/Drive_preparation 
-
-> Hynix PC601, Lenovo and Dell laptops, Samsung and WD SN750 drive may not `nvme format` command and require a 
-
-4.	plain dm-crypt on LVM: https://wiki.archlinux.org/title/Dm-crypt/Encrypting_an_entire_system#Plain_dm-crypt 
-
-
-#### Formatting
+**Formatting**
 
 For the EFI system partition (if newly created, [see Partitioning discs](url#Partitioning-discs):
 
@@ -141,28 +291,15 @@ For the EFI system partition (if newly created, [see Partitioning discs](url#Par
 
 > Must unavoidably be FAT32
 
-For the swap partition
-
 For the root partition :
 
-`cryptsetup luksFormat /dev/<root_partition>
+For the swap
 
-> Type `YES` and then enter and verify a passphrase (long but easily rememberable)
+`mkfs.ext4 /dev/
 
-Then decrypt and name root partition:
-`cryptsetup open /dev/root_partition <decrypted_name>`
-
-> And enter passphrase as requested
-
-Decrypted root partition is now visible as previously named under it’s corresponding device and partition when running `lsblk`. It can now be formatted:
-
-`mkfs.ext4 /dev/mapper/<decrypted_name>`
-
-#### Mounting
+**Mounting**
 
 Mount root partition first:
-
-`mount /dev/mapper/<decrypted_name> /mnt`
 
 Make the `/boot` directory to mount the boot partition on:
 
@@ -172,27 +309,144 @@ And mount it on:
 
 `mount /dev/boot_partition /mnt/boot`
 
-> If also encrypted refer to the decrypted partition as above
+`mount /dev/swap_partition /mnt/swap`
 
-Same for swap…
+`swapon --discard /dev/swap_partition` to enable swap volume
+
+setup hibernation https://wiki.archlinux.org/title/Power_management/Suspend_and_hibernate#Configure_the_initramfs 
+
+
+#### On personal desktop
+
+SSDs + HDDs
+
+Swap with hibernate and no encryption; enabled TRIM
+
 
 ### Installing the OS
 
 #### Selecting the mirrors
 
+Edit `/etc/pacman.d/mirrorlist` by moving the geographically closest mirrors to the top of the list
+
+In nano:
+
+> Move to a desired block of text with `Ctrl` + `Down_arrow`
+>
+> Set a mark with `Alt` + `A`
+>
+> Move to the start of the next block with `Ctrl` + `Down_arrow`
+>
+> Cut the block with `Ctrl` + `K`
+>
+> Move to the top of the file with `Alt` + `\` or `Ctrl` + `Up_arrow`
+>
+> Paste the block in the desired position with `Ctrl` + `U`
+
 #### Allowing for parallel download
 
-For faste arch installation and faster packet downloads in general, edit `etc/pacman.d/hooks`:
+For fast arch installation and faster packet downloads in general, edit `etc/pacman.conf`:
 
 > `#ParallelDownloads = 5`
 > 
->> Uncomment the line by deleting the `#` and change the value to the number of threads the CPU has
+>> Uncomment the line by deleting the `#` and change the value to the number of threads the CPU has? Or set between 3 and 5
 
 This will have to be done again in the [base configuration step](#base-configuration) as no configuration (except for /etc/pacman.d/mirrorlist) gets carried over from the live environment to the installed system.
 
 #### Download desired packages
 
-`pacstrap /mnt base base-devel linux linux-firmware nano vim networkmanager lvm2 cryptsetup grub efibootmgr `
+`pacstrap -K /mnt base base-devel linux linux-firmware amd-ucode nano vim zsh man-db man-pages networkmanager iwd lvm2 cryptsetup grub efibootmgr`
+
+> add terminus-font? timesyncd?
+>
+> remove iwd?
+
+#### Fstab
+
+`genfstab -U /mnt >> /mnt/etc/fstab`
+
+> Check `/mnt/etc/fstab` and edit it in case of errors
+>
+>> fab8e35b-2d27-42ce-b987-f6f926c102e6
+
+#### Chroot
+
+Chroot with active dbus connection:
+
+`arch-chroot -S /mnt`
+
+#### Time
+
+`ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime`
+
+Generate `/etc/adjtime`:
+
+`hwclock --systohc`
+
+Set up time synchronization
+
+`system-timesyncd`
+
+Enable NTP:
+sudo timedatectl set-ntp true
+
+#### Localization
+
+Edit `/etc/locale.gen` by uncommenting needed UTF-8 locales:
+
+> `en_US.UTF-8 UTF-8`
+>
+> …
+>
+> `fr_FR.UTF-8 UTF-8`
+>
+>> `en_US.UTF-8 UTF-8` is recommended as a fallback for various tools
+
+Then generate locales with:
+
+`locale-gen`
+
+                                                                                                                                                                                     
+
+Console fonts are located in `/usr/share/kbd/consolefonts/`
+
+> `ls /usr/share/kbd/consolefonts/ 2>&1| less` to scroll through the list
+>
+>> `q` to quit `less`
+
+Set Latin-9 (8859-9), a latin-1 with full french coverage:
+
+`setfont --double lat9w-16`
+
+To set with persistence, edit `/etc/vconsole.conf`:
+
+> `KEYMAP=bepo-fr`
+>
+> `FONT=lat9w-16`
+
+Or install terminus-fonts and use ter-132b (bold) or ter-132n (normal)
+
+#### Network
+
+Edit `/etc/hostname`
+
+> <hostname>
+
+-	arch
+-	btw
+-	…
+
+Networkmanager
+
+`systemctl enable NetworkManager`
+
+Enabling iwd’s network configuration feature (once installed):
+
+> echo -e “[General]\nEnableNetworkingConfiguration=true” > /etc/iwd/main.conf
+>
+>> `-e` instructs to interpret the newline character: `\n`
+
+See [iwd]( https://wiki.archlinux.org/title/Iwd#Optional_configuration) of the arch wiki
 
 ##### On personal laptop (Broadcom wireless controller BCM4311)
 
@@ -213,35 +467,139 @@ Some modules are loaded as part of the initramfs. mkinitcpio -M will print out a
 
 Then resume connecting to wifi or proceed with alternative internet connection and deal with wlan0 later.
 
-## Base configuration
+#### Initramfs
 
-### Fstab
+For system-based initramfs edit `/etc/mkinitcpio.conf`:
 
-### Chroot
+> `HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)`
 
-### Time
+Regenerate the initramfs image:
 
-### Localization
+`mkinitcpio -P`
 
-### Network
+#### Root password
 
-Enabling iwd’s network configuration feature (once installed):
+Set to none and lock root.
 
-> echo -e “[General]\nEnableNetworkingConfiguration=true” > /etc/iwd/main.conf
+First create user
+
+`useradd -m -G wheel,users <user>`
+
+-	admin
+-	sysadmin
+-	god
+-	godmod
+-	iddqd
+-	godlovesecretsex
+-	arch
+-	raven
+-	corvus
+-	simon
+
+@:
+-	enroute
+-	raven
+-	arch
+-	btw
+
+Set password
+
+`passwd <user>`
+
+Grant wheel group all access:
+
+`visudo /etc/sudoers.d/10-wheel`
+
+> `%wheel	ALL=(ALL:ALL) ALL`
+
+Install sudo (and visudo) package(s) (add to pacstap ?):
+
+`pacman -S
+
+Log as the user
+
+`su <user>`
+
+> enter password
+
+Lock root account
+
+`sudo passwd -l root`
+
+> if already existing deleate and lock:
 >
->> `-e` instructs to interpret the newline character: `\n`
+> `sudo passwd -dl root`
 
-See [iwd]( https://wiki.archlinux.org/title/Iwd#Optional_configuration) of the arch wiki
+#### Boot loader
 
-### Initramfs
+Install grub
 
-### Root password
+`grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB`
 
-### Boot loader
+> required grub and efibootmgr packages already downloaded by previous `pacstrap` command
 
-### Reboot
+https://wiki.archlinux.org/title/GRUB 
 
-## Advanced configuration
+Generate `grub.cfg`
+
+`grub-mkconfig -o /boot/grub/grub.cfg`
+
+https://wiki.archlinux.org/title/GRUB#Generated_grub.cfg
+
+> If `grub-probe: error: failed to get canonical path of /dev/<device>`, run:
+>
+>> `arch-chroot -S /mnt grub-mkconfig -o /boot/grub/grub.cfg `
+
+#### Reboot
+
+Exit chroot environment:
+
+`exit`
+
+Unmount all partitions:
+
+`umount -R /mnt`
+
+> use `fuser` in case of busy partitions
+
+`reboot now` and remove installation medium
+
+Login with created user
+
+## Post-installation
+
+### Encrypting logical volume /home on work laptop
+
+Creating keyfile to avoid entering a second passphrase at boot:
+
+`dd bs=512 count=4 if=/dev/random iflag=fullblock | install -m 0600 /dev/stdin /etc/cryptsetup-keys.d/home.key`
+
+Encrypting:
+
+`cryptsetup luksFormat -v /dev/MyVolGroup/crypthome /etc/cryptsetup-keys.d/home.key`
+
+`cryptsetup -d /etc/cryptsetup-keys.d/home.key --allow-discards --persistent open /dev/MyVolGroup/crypthome home`
+
+Mounting:
+
+`mkfs.ext4 /dev/mapper/home`
+
+`mount /dev/mapper/home /home`
+
+Editing `/etc/crypttab`:
+
+`home	/dev/MyVolGroup/crypthome	none`
+
+Editing `/etc/fstab`:
+
+`/dev/mapper/home	/home	ext4	defaults	0	2`
+
+### Hardening
+
+#### Users
+
+https://wiki.archlinux.org/title/Sudo#Harden_with_sudo_example
+
 
 ## Customisation
 
