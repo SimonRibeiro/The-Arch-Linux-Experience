@@ -355,9 +355,11 @@ This will have to be done again in the [base configuration step](#base-configura
 
 #### Download desired packages
 
-`pacstrap -K /mnt base base-devel linux linux-firmware amd-ucode nano vim zsh man-db man-pages networkmanager iwd lvm2 cryptsetup grub efibootmgr`
+`pacstrap -K /mnt base base-devel linux linux-firmware amd-ucode vi vim nano zsh man-db man-pages networkmanager iwd lvm2 cryptsetup grub efibootmgr`
 
-> add terminus-font? timesyncd?
+> add terminus-font and vi
+>
+> add timesyncd?
 >
 > remove iwd?
 
@@ -406,7 +408,15 @@ Then generate locales with:
 
 `locale-gen`
 
-                                                                                                                                                                                     
+Create `/etc/locale.conf`:
+
+> LANG=fr_FR.UTF-8
+>
+> LANGUAGE=en_US:en
+>
+>> Fallbacks separated by `:` (`:C:` if adding other languages after English)
+>
+> LC_MESSAGES=en_US.UTF-8
 
 Console fonts are located in `/usr/share/kbd/consolefonts/`
 
@@ -423,8 +433,8 @@ To set with persistence, edit `/etc/vconsole.conf`:
 > `KEYMAP=bepo-fr`
 >
 > `FONT=lat9w-16`
-
-Or install terminus-fonts and use ter-132b (bold) or ter-132n (normal)
+>
+>> Or install `terminus-fonts` and use `ter-132b` (bold) or `ter-132n` (normal)
 
 #### Network
 
@@ -472,6 +482,8 @@ Then resume connecting to wifi or proceed with alternative internet connection a
 For system-based initramfs edit `/etc/mkinitcpio.conf`:
 
 > `HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt lvm2 filesystems fsck)`
+>
+>> add `sd-encrypt` and `lvm2`
 
 Regenerate the initramfs image:
 
@@ -506,15 +518,15 @@ Set password
 
 `passwd <user>`
 
+Install sudo (and visudo) package(s) (add to pacstap ?):
+
+`pacman -S vi`
+
 Grant wheel group all access:
 
 `visudo /etc/sudoers.d/10-wheel`
 
 > `%wheel	ALL=(ALL:ALL) ALL`
-
-Install sudo (and visudo) package(s) (add to pacstap ?):
-
-`pacman -S
 
 Log as the user
 
@@ -526,7 +538,7 @@ Lock root account
 
 `sudo passwd -l root`
 
-> if already existing deleate and lock:
+> if already existing delete and lock:
 >
 > `sudo passwd -dl root`
 
@@ -540,7 +552,7 @@ Install grub
 
 https://wiki.archlinux.org/title/GRUB 
 
-Generate `grub.cfg`
+Generate `grub.cfg`:
 
 `grub-mkconfig -o /boot/grub/grub.cfg`
 
